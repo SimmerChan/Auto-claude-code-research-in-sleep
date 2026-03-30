@@ -36,7 +36,7 @@ refine-logs/FINAL_PROPOSAL.md
 - **BASE_REPO = false** — GitHub repo URL to use as base codebase. When set, clone the repo first and implement experiments on top of it. When `false` (default), write code from scratch or reuse existing project files.
 - **COMPACT = false** — When `true`, (1) read `IDEA_CANDIDATES.md` instead of full `IDEA_REPORT.md` if available, (2) append experiment results to `EXPERIMENT_LOG.md` after collection.
 - **DEVICE_TYPE = "npu"** — Target device type. Use `"npu"` for Ascend NPU. Do NOT use `"cuda"` for Ascend hardware.
-- **NPU_DEVICE_ID = "3"** — Default NPU device ID.
+- **NPU_DEVICE_ID = "5"** — Default NPU device ID.
 
 > Override: `/experiment-bridge "EXPERIMENT_PLAN.md" — compact: true, base repo: https://github.com/org/project`
 
