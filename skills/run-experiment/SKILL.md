@@ -1,13 +1,13 @@
 ---
 name: run-experiment
-description: Deploy and run ML experiments on local or remote GPU servers. Use when user says "run experiment", "deploy to server", "跑实验", or needs to launch training jobs.
+description: Deploy and run ML experiments on local or remote Ascend NPU servers. Use when user says "run experiment", "deploy to server", "跑实验", or needs to launch training jobs.
 argument-hint: [experiment-description]
 allowed-tools: Bash(*), Read, Grep, Glob, Edit, Write, Agent
 ---
 
 # Run Experiment
 
-Deploy and run ML experiment: $ARGUMENTS
+Deploy and run ML experiment on Ascend NPU: $ARGUMENTS
 
 ## Workflow
 
@@ -15,28 +15,26 @@ Deploy and run ML experiment: $ARGUMENTS
 
 Read the project's `CLAUDE.md` to determine the experiment environment:
 
-- **Local GPU**: Look for local CUDA/MPS setup info
+- **Local NPU**: Look for local Ascend NPU setup info
 - **Remote server**: Look for SSH alias, conda env, code directory
 
 If no server info is found in `CLAUDE.md`, ask the user.
 
 ### Step 2: Pre-flight Check
 
-Check GPU availability on the target machine:
+Check NPU availability on the target machine:
 
 **Remote:**
 ```bash
-ssh <server> nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader
+ssh <server> npu-smi info
 ```
 
 **Local:**
 ```bash
-nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader
-# or for Mac MPS:
-python -c "import torch; print('MPS available:', torch.backends.mps.is_available())"
+npu-smi info
 ```
 
-Free GPU = memory.used < 500 MiB.
+Free NPU = memory.used < 500 MiB.
 
 ### Step 3: Sync Code (Remote Only)
 
@@ -89,7 +87,7 @@ Before deploying, ensure the experiment scripts have W&B logging:
    - `train/loss` — training loss per step
    - `train/lr` — learning rate
    - `eval/loss`, `eval/ppl`, `eval/accuracy` — eval metrics per epoch
-   - `gpu/memory_used` — GPU memory (via `torch.cuda.max_memory_allocated()`)
+   - `npu/memory_used` — NPU memory (via `torch_npu.npu.max_memory_allocated()`)
    - `speed/samples_per_sec` — throughput
    - Any custom metrics the experiment already computes
 
@@ -106,22 +104,19 @@ Before deploying, ensure the experiment scripts have W&B logging:
 
 #### Remote (via SSH + screen)
 
-For each experiment, create a dedicated screen session with GPU binding:
+For each experiment, create a dedicated screen session with NPU binding:
 ```bash
 ssh <server> "screen -dmS <exp_name> bash -c '\
   eval \"\$(<conda_path>/conda shell.bash hook)\" && \
   conda activate <env> && \
-  CUDA_VISIBLE_DEVICES=<gpu_id> python <script> <args> 2>&1 | tee <log_file>'"
+  ASCEND_VISIBLE_DEVICES=<npu_id> python <script> <args> 2>&1 | tee <log_file>'"
 ```
 
 #### Local
 
 ```bash
-# Linux with CUDA
-CUDA_VISIBLE_DEVICES=<gpu_id> python <script> <args> 2>&1 | tee <log_file>
-
-# Mac with MPS (PyTorch uses MPS automatically)
-python <script> <args> 2>&1 | tee <log_file>
+# Linux with Ascend NPU
+ASCEND_VISIBLE_DEVICES=<npu_id> python <script> <args> 2>&1 | tee <log_file>
 ```
 
 For local long-running jobs, use `run_in_background: true` to keep the conversation responsive.
@@ -131,25 +126,26 @@ For local long-running jobs, use `run_in_background: true` to keep the conversat
 **Remote:**
 ```bash
 ssh <server> "screen -ls"
+ssh <server> "npu-smi info"
 ```
 
 **Local:**
-Check process is running and GPU is allocated.
+Check process is running and NPU is allocated.
 
 ### Step 6: Feishu Notification (if configured)
 
 After deployment is verified, check `~/.claude/feishu.json`:
-- Send `experiment_done` notification: which experiments launched, which GPUs, estimated time
+- Send `experiment_done` notification: which experiments launched, which NPUs, estimated time
 - If config absent or mode `"off"`: skip entirely (no-op)
 
 ## Key Rules
 
-- ALWAYS check GPU availability first — never blindly assign GPUs
-- Each experiment gets its own screen session + GPU (remote) or background process (local)
+- ALWAYS check NPU availability first — never blindly assign NPUs
+- Each experiment gets its own screen session + NPU (remote) or background process (local)
 - Use `tee` to save logs for later inspection
 - Run deployment commands with `run_in_background: true` to keep conversation responsive
-- Report back: which GPU, which screen/process, what command, estimated time
-- If multiple experiments, launch them in parallel on different GPUs
+- Report back: which NPU, which screen/process, what command, estimated time
+- If multiple experiments, launch them in parallel on different NPUs
 
 ## CLAUDE.md Example
 
@@ -157,8 +153,8 @@ Users should add their server info to their project's `CLAUDE.md`:
 
 ```markdown
 ## Remote Server
-- SSH: `ssh my-gpu-server`
-- GPU: 4x A100 (80GB each)
+- SSH: `ssh my-npu-server`
+- NPU: 4x Ascend 910B (32GB each)
 - Conda: `eval "$(/opt/conda/bin/conda shell.bash hook)" && conda activate research`
 - Code dir: `/home/user/experiments/`
 - code_sync: rsync          # default. Or set to "git" for git push/pull workflow
@@ -167,8 +163,8 @@ Users should add their server info to their project's `CLAUDE.md`:
 - wandb_entity: my-team     # W&B team/user (optional, uses default if omitted)
 
 ## Local Environment
-- Mac MPS / Linux CUDA
-- Conda env: `ml` (Python 3.10 + PyTorch)
+- Linux with Ascend NPU
+- Conda env: `ml` (Python 3.10 + PyTorch + CANN)
 ```
 
 > **W&B setup**: Run `wandb login` on your server once (or set `WANDB_API_KEY` env var). The skill reads project/entity from CLAUDE.md and adds `wandb.init()` + `wandb.log()` to your training scripts automatically. Dashboard: `https://wandb.ai/<entity>/<project>`.
