@@ -1,17 +1,17 @@
 ---
 name: experiment-bridge
-description: "Workflow 1.5: Bridge between idea discovery and auto review. Reads EXPERIMENT_PLAN.md, implements experiment code, deploys to GPU, collects initial results. Use when user says \"实现实验\", \"implement experiments\", \"bridge\", \"从计划到跑实验\", \"deploy the plan\", or has an experiment plan ready to execute."
+description: "Workflow 1.5: Bridge between idea discovery and auto review. Reads EXPERIMENT_PLAN.md, implements experiment code, deploys to Ascend NPU, collects initial results. Use when user says \"实现实验\", \"implement experiments\", \"bridge\", \"从计划到跑实验\", \"deploy the plan\", or has an experiment plan ready to execute."
 argument-hint: [experiment-plan-path-or-topic]
 allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob, Agent, Skill, mcp__codex__codex, mcp__codex__codex-reply
 ---
 
-# Workflow 1.5: Experiment Bridge
+# Workflow 1.5: Experiment Bridge (Ascend NPU)
 
-Implement and deploy experiments from plan: **$ARGUMENTS**
+Implement and deploy experiments from plan: **$ARGUMENTS** on **Ascend NPU**
 
 ## Overview
 
-This skill bridges Workflow 1 (idea discovery + method refinement) and Workflow 2 (auto review loop). It takes the experiment plan and turns it into running experiments with initial results.
+This skill bridges Workflow 1 (idea discovery + method refinement) and Workflow 2 (auto review loop). It takes the experiment plan and turns it into running experiments with initial results on Ascend NPU hardware.
 
 ```
 Workflow 1 output:                    This skill:                                    Workflow 2 input:
@@ -20,14 +20,23 @@ refine-logs/EXPERIMENT_TRACKER.md     code        (cross-model)    /run-experime
 refine-logs/FINAL_PROPOSAL.md
 ```
 
+## Ascend NPU 错误处理参考
+
+如果在昇腾 NPU 上遇到 API 报错，请参考昇腾社区 PyTorch API 文档：
+- 文档地址：https://www.hiascend.com/document/detail/zh/Pytorch/730/apiref/PyTorchNativeapi/docs/zh/native_apis/pytorch_2-9-0/overview.md
+- 常见问题：确保 `torch_npu` 扩展已正确安装，设备设置为 `npu:0` 而非 `cuda:0`
+- 若遇到算子不支持报错，检查是否需要使用 `torch.npu` 替代 `torch.cuda` 相关 API
+
 ## Constants
 
-- **CODE_REVIEW = true** — GPT-5.4 xhigh reviews experiment code before deployment. Catches logic bugs before wasting GPU hours. Set `false` to skip.
+- **CODE_REVIEW = true** — GPT-5.4 xhigh reviews experiment code before deployment. Catches logic bugs before wasting NPU hours. Set `false` to skip.
 - **AUTO_DEPLOY = true** — Automatically deploy experiments after implementation + review. Set `false` to manually inspect code before deploying.
 - **SANITY_FIRST = true** — Run the sanity-stage experiment first (smallest, fastest) before launching the rest. Catches setup bugs early.
-- **MAX_PARALLEL_RUNS = 4** — Maximum number of experiments to deploy in parallel (limited by available GPUs).
+- **MAX_PARALLEL_RUNS = 4** — Maximum number of experiments to deploy in parallel (limited by available NPUs).
 - **BASE_REPO = false** — GitHub repo URL to use as base codebase. When set, clone the repo first and implement experiments on top of it. When `false` (default), write code from scratch or reuse existing project files.
 - **COMPACT = false** — When `true`, (1) read `IDEA_CANDIDATES.md` instead of full `IDEA_REPORT.md` if available, (2) append experiment results to `EXPERIMENT_LOG.md` after collection.
+- **DEVICE_TYPE = "npu"** — Target device type. Use `"npu"` for Ascend NPU. Do NOT use `"cuda"` for Ascend hardware.
+- **NPU_DEVICE_ID = "3"** — Default NPU device ID.
 
 > Override: `/experiment-bridge "EXPERIMENT_PLAN.md" — compact: true, base repo: https://github.com/org/project`
 
@@ -85,7 +94,7 @@ For each milestone (in order), write the experiment scripts:
 
 1. **Check existing code** — scan the project (or cloned `base_repo/`) for existing experiment scripts, model code, data loaders. Reuse as much as possible.
 
-2. **Implement missing pieces:**
+2. **Implement missing pieces (Ascend NPU compatible):**
    - Training scripts with proper argparse (all hyperparameters configurable)
    - Evaluation scripts computing the specified metrics
    - Data loading / preprocessing if needed
@@ -93,6 +102,9 @@ For each milestone (in order), write the experiment scripts:
    - Fixed random seeds for reproducibility
    - Results saved to JSON/CSV for later analysis
    - Proper logging (wandb if configured in CLAUDE.md)
+   - **NPU device placement**: Use `torch.npu.set_device(device_id)` instead of `torch.cuda.set_device()`; device is `"npu"` not `"cuda"`
+   - **NPU-compatible operators**: Prefer `torch.npu` APIs over `torch.cuda`; avoid CUDA-specific extensions
+   - **AMP support**: Use `torch.npu.amp` for automatic mixed precision on Ascend NPU
 
 3. **Follow the plan's run order** — implement sanity-stage experiments first, then baselines, then main method, then ablations.
 
@@ -129,7 +141,8 @@ mcp__codex__codex:
     3. Are there any logic bugs (wrong loss function, incorrect data split, missing eval)?
     4. Is the evaluation metric computed correctly?
     5. **CRITICAL: Does evaluation use the dataset's actual ground truth labels — NOT another model's output as ground truth?** This is a common and severe bug.
-    6. Any potential issues (OOM risk, numerical instability, missing seeds)?
+    6. **NPU compatibility: Is the code using `torch.npu` APIs instead of `torch.cuda`?** Verify device placement uses `npu` not `cuda`.
+    7. Any potential issues (OOM risk, numerical instability, missing seeds)?
 
     For each issue found, specify: CRITICAL / MAJOR / MINOR and the exact fix.
 ```
@@ -141,21 +154,22 @@ mcp__codex__codex:
 
 ### Phase 3: Sanity Check (if SANITY_FIRST = true)
 
-Before deploying the full experiment suite, run the sanity-stage experiment:
+Before deploying the full experiment suite, run the sanity-stage experiment on NPU:
 
 ```
 /run-experiment [sanity experiment command]
 ```
 
 Wait for completion. Verify:
-- Training loop runs without errors
+- Training loop runs without errors on NPU
 - Metrics are computed and saved correctly
-- GPU memory usage is within bounds
+- NPU memory usage is within bounds (check via `torch.npu.memory_allocated()`)
 - Output format matches expectations
+- **NPU-specific checks**: Ensure `torch.npu.is_available()` returns True and NPU device is correctly set
 
-If sanity fails → fix the code, re-run. Do not proceed to full deployment with broken code.
+If sanity fails → check [昇腾 PyTorch API 文档](https://www.hiascend.com/document/detail/zh/Pytorch/730/apiref/PyTorchNativeapi/docs/zh/native_apis/pytorch_2-9_0/overview.md) for error resolution. Do not proceed to full deployment with broken code.
 
-### Phase 4: Deploy Full Experiments
+### Phase 4: Deploy Full Experiments to NPU
 
 Deploy experiments following the plan's milestone order:
 
@@ -164,21 +178,21 @@ Deploy experiments following the plan's milestone order:
 ```
 
 For each milestone:
-1. Deploy experiments in parallel (up to MAX_PARALLEL_RUNS)
+1. Deploy experiments in parallel on NPU (up to MAX_PARALLEL_RUNS)
 2. Use `/monitor-experiment` to track progress
 3. Collect results as experiments complete
 
 **🚦 Checkpoint (if AUTO_DEPLOY = false):**
 
 ```
-🔧 Code implementation complete. Ready to deploy:
+🔧 Code implementation complete. Ready to deploy to Ascend NPU:
 
 Milestone 0 (sanity): [status — passed/pending]
-Milestone 1 (baseline): [N experiments, ~X GPU-hours]
-Milestone 2 (main method): [N experiments, ~X GPU-hours]
-Milestone 3 (ablations): [N experiments, ~X GPU-hours]
+Milestone 1 (baseline): [N experiments, ~X NPU-hours]
+Milestone 2 (main method): [N experiments, ~X NPU-hours]
+Milestone 3 (ablations): [N experiments, ~X NPU-hours]
 
-Total estimated: ~X GPU-hours on [N] GPUs
+Total estimated: ~X NPU-hours on [N] NPUs
 
 Deploy now? Or review the code first?
 ```
@@ -192,6 +206,7 @@ As experiments complete:
 3. **Update `refine-logs/EXPERIMENT_TRACKER.md`** — fill in Status and Notes columns
 4. **Check success criteria** from EXPERIMENT_PLAN.md — did each experiment meet its bar?
 4. **Write initial results summary:**
+5. **NPU health check** — verify no NPU-specific errors ( HCCL, Device side errors) in logs
 
 ```markdown
 # Initial Experiment Results
@@ -254,14 +269,16 @@ After main experiments (M2) complete with positive results, invoke `/ablation-pl
 
 If `/ablation-planner` is not available, skip silently — the existing EXPERIMENT_PLAN.md ablation blocks (if any) remain unchanged.
 
+> **NPU Note for Ablations**: When planning ablation runs on NPU, ensure each ablation variant is NPU-compatible before deployment.
+
 ### Phase 6: Handoff
 
 Present final status:
 
 ```
-🔬 Experiment bridge complete:
-- Implemented: [N] experiment scripts
-- Deployed: [N] experiments on [M] GPUs
+🔬 Experiment bridge complete (Ascend NPU):
+- Implemented: [N] experiment scripts (NPU compatible)
+- Deployed: [N] experiments on [M] NPUs
 - Completed: [X/Y] must-run, [A/B] nice-to-have
 - Main result: [one sentence]
 
@@ -276,13 +293,14 @@ Ready for Workflow 2:
 
 - **Large file handling**: If the Write tool fails due to file size, immediately retry using Bash (`cat << 'EOF' > file`) to write in chunks. Do NOT ask the user for permission — just do it silently.
 - **CRITICAL — Evaluation must use dataset ground truth.** When writing evaluation scripts, ALWAYS compare model predictions against the dataset's actual ground truth labels/targets — NEVER use another model's output as ground truth. Double-check: (1) ground truth comes from the dataset split, not from a baseline/backbone model, (2) evaluation metrics are computed against the same ground truth for all methods, (3) if the task has official eval scripts, use those.
+- **CRITICAL — Use NPU APIs, not CUDA.** For Ascend NPU deployment: use `torch.npu` instead of `torch.cuda`. Device string is `"npu"` not `"cuda"`. If encountering API errors, consult the [昇腾 PyTorch API 文档](https://www.hiascend.com/document/detail/zh/Pytorch/730/apiref/PyTorchNativeapi/docs/zh/native_apis/pytorch_2-9_0/overview.md).
 - **Follow the plan.** Do not invent experiments not in EXPERIMENT_PLAN.md. If you think something is missing, note it but don't add it.
-- **Sanity first.** Never deploy a full suite without verifying the sanity stage passes.
+- **Sanity first.** Never deploy a full suite without verifying the sanity stage passes on NPU.
 - **Reuse existing code.** Scan the project before writing new scripts. Extend, don't duplicate.
 - **Save everything as JSON/CSV.** The auto-review-loop needs parseable results, not just terminal output.
 - **Update the tracker.** `EXPERIMENT_TRACKER.md` should reflect real status after each run completes.
 - **Don't wait forever.** If an experiment exceeds 2x its estimated time, flag it and move on to the next milestone.
-- **Budget awareness.** Track GPU-hours against the plan's budget. Warn if approaching the limit.
+- **Budget awareness.** Track NPU-hours against the plan's budget. Warn if approaching the limit.
 
 ## Composing with Other Skills
 
